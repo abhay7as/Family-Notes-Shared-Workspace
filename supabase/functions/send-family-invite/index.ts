@@ -25,6 +25,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const siteUrl = Deno.env.get("SITE_URL") ?? "http://localhost:3000";
 
     const callerClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
@@ -39,53 +40,51 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    const { data: callerRoleRow } = await admin
+    const { data: callerRoleRow, error: callerRoleError } = await admin
       .from("user_roles")
       .select("role, family_id")
       .eq("user_id", caller.id)
       .maybeSingle();
 
-    if (!callerRoleRow || callerRoleRow.role !== "super_admin") {
-      return json({ error: "Only a super admin can delete members" }, 403);
+    if (callerRoleError) return json({ error: callerRoleError.message }, 500);
+
+    if (!callerRoleRow || !["admin", "super_admin"].includes(callerRoleRow.role)) {
+      return json({ error: "Only admins can invite members" }, 403);
     }
 
     const body = await req.json().catch(() => null);
-    const userId = body?.userId;
-    if (!userId) return json({ error: "userId is required" }, 400);
-    if (userId === caller.id) return json({ error: "You cannot delete your own account" }, 400);
+    const email = body?.email?.trim().toLowerCase();
+    const role = body?.role ?? "member";
 
-    const { data: targetRoleRow } = await admin
-      .from("user_roles")
-      .select("family_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (!targetRoleRow || targetRoleRow.family_id !== callerRoleRow.family_id) {
-      return json({ error: "That member is not in your family" }, 403);
+    if (!email) return json({ error: "Email is required" }, 400);
+    if (!["member", "admin", "super_admin"].includes(role)) {
+      return json({ error: "Invalid role" }, 400);
+    }
+    if (role === "super_admin" && callerRoleRow.role !== "super_admin") {
+      return json({ error: "Only a super admin can invite another super admin" }, 403);
     }
 
-    await Promise.all([
-      admin.from("family_members").delete().eq("user_id", userId),
-      admin.from("user_roles").delete().eq("user_id", userId),
-      admin.from("comments").delete().eq("author_id", userId),
-      admin.from("note_favorites").delete().eq("user_id", userId),
-      admin.from("notifications").delete().eq("user_id", userId),
-    ]);
+    const { data: inviteData, error: inviteError } =
+      await admin.auth.admin.inviteUserByEmail(email, {
+        data: {
+          family_id: callerRoleRow.family_id,
+          role,
+          invited_by: caller.id,
+        },
+        redirectTo: `${siteUrl}/accept-invite`,
+      });
 
-    const { error: profileError } = await admin.from("profiles").delete().eq("id", userId);
-    if (profileError) return json({ error: profileError.message }, 500);
-
-    const { error: authError } = await admin.auth.admin.deleteUser(userId);
-    if (authError) return json({ error: authError.message }, 500);
+    if (inviteError) return json({ error: inviteError.message }, 400);
 
     await admin.from("activity_log").insert({
       actor_id: caller.id,
-      action: "member_deleted",
+      action: "invitation_sent",
       target_type: "user",
-      target_id: userId,
+      target_id: inviteData.user?.id ?? null,
+      metadata: { email, role },
     });
 
-    return json({ success: true }, 200);
+    return json({ success: true, user: inviteData.user }, 200);
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
   }

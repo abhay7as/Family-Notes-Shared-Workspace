@@ -20,56 +20,108 @@ function Dashboard() {
   const { data: session } = useSession();
   const name = session?.profile.display_name?.split(" ")[0] ?? "there";
 
-  const stats = useQuery({
-    queryKey: ["dashboard-stats"],
-    queryFn: async () => {
-      const [notes, pinned, members, activity] = await Promise.all([
-        supabase.from("notes").select("id", { count: "exact", head: true }).eq("archived", false),
-        supabase.from("notes").select("id", { count: "exact", head: true }).eq("pinned", true),
-        supabase.from("profiles").select("id", { count: "exact", head: true }),
-        supabase
-          .from("activity_log")
-          .select("*, actor:profiles!activity_log_actor_id_fkey(display_name, avatar_url)")
-          .order("created_at", { ascending: false })
-          .limit(10),
-      ]);
-      return {
-        notes: notes.count ?? 0,
-        pinned: pinned.count ?? 0,
-        members: members.count ?? 0,
-        activity: (activity.data ?? []) as any[],
-      };
-    },
-  });
+ const stats = useQuery({
+  queryKey: ["dashboard-stats"],
 
-  const recent = useQuery({
-    queryKey: ["dashboard-recent-notes"],
-    queryFn: async () => {
-    const { data: notes } = await supabase
-  .from("notes")
-  .select("id, title, updated_at, author_id")
-  .eq("archived", false)
-  .order("updated_at", { ascending: false })
-  .limit(6);
+  queryFn: async () => {
+    const [notes, pinned, members, activityRes] = await Promise.all([
+      supabase
+        .from("notes")
+        .select("id", { count: "exact", head: true })
+        .eq("archived", false),
 
-const authorIds = [...new Set((notes ?? []).map((n) => n.author_id))];
+      supabase
+        .from("notes")
+        .select("id", { count: "exact", head: true })
+        .eq("pinned", true),
 
-const { data: profiles } = await supabase
-  .from("profiles")
-  .select("id, display_name")
-  .in("id", authorIds);
+      supabase
+        .from("profiles")
+        .select("id", { count: "exact", head: true }),
 
-const profileMap = new Map(
-  (profiles ?? []).map((p) => [p.id, p])
-);
+      supabase
+        .from("activity_log")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
 
-return (notes ?? []).map((n) => ({
-  ...n,
-  author: profileMap.get(n.author_id) ?? null,
-}));
-      return (data ?? []) as any[];
-    },
-  });
+    const activities = activityRes.data ?? [];
+
+    const actorIds = [
+      ...new Set(
+        activities
+          .map((a) => a.actor_id)
+          .filter(Boolean)
+      ),
+    ];
+
+    let profileMap = new Map();
+
+    if (actorIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id, display_name, avatar_url")
+        .in("id", actorIds);
+
+      profileMap = new Map(
+        (profiles ?? []).map((p) => [p.id, p])
+      );
+    }
+
+    const activity = activities.map((a) => ({
+      ...a,
+      actor: profileMap.get(a.actor_id) ?? null,
+    }));
+
+    return {
+      notes: notes.count ?? 0,
+      pinned: pinned.count ?? 0,
+      members: members.count ?? 0,
+      activity,
+    };
+  },
+});
+const recent = useQuery({
+  queryKey: ["dashboard-recent-notes"],
+
+  queryFn: async () => {
+    const { data: notes, error } = await supabase
+      .from("notes")
+      .select("id,title,updated_at,author_id")
+      .eq("archived", false)
+      .order("updated_at", { ascending: false })
+      .limit(6);
+
+    if (error) throw error;
+
+    const authorIds = [
+      ...new Set(
+        (notes ?? [])
+          .map((n) => n.author_id)
+          .filter(Boolean)
+      ),
+    ];
+
+    let profileMap = new Map();
+
+    if (authorIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id,display_name,avatar_url")
+        .in("id", authorIds);
+
+      profileMap = new Map(
+        (profiles ?? []).map((p) => [p.id, p])
+      );
+    }
+
+    return (notes ?? []).map((n) => ({
+      ...n,
+      author: profileMap.get(n.author_id) ?? null,
+    }));
+  },
+});
 
   const StatCard = ({ icon: Icon, label, value }: any) => (
     <Card className="shadow-soft">
@@ -134,10 +186,11 @@ return (notes ?? []).map((n) => ({
             {(stats.data?.activity ?? []).map((a) => (
               <div key={a.id} className="flex items-center gap-3 text-sm">
                 <Avatar className="h-7 w-7">
-                  <AvatarImage src={a.actor?.avatar_url ?? undefined} />
-                  <AvatarFallback className="text-[10px]">
-                    {initials(a.actor?.display_name ?? "?")}
-                  </AvatarFallback>
+                <AvatarImage src={a.actor?.avatar_url ?? undefined} />
+
+<AvatarFallback className="text-[10px]">
+  {initials(a.actor?.display_name ?? "Someone")}
+</AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <div className="truncate">
