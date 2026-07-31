@@ -60,26 +60,56 @@ function AcceptInvitePage() {
   }, []);
 
   async function handleSetPassword(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  e.preventDefault();
 
-    if (password.length < 8) return toast.error("Password must be at least 8 characters");
-    if (password !== confirmPassword) return toast.error("Passwords do not match");
+  if (password.length < 8) return toast.error("Password must be at least 8 characters");
+  if (password !== confirmPassword) return toast.error("Passwords do not match");
 
-    setSubmitting(true);
-    const { error } = await supabase.auth.updateUser({ password });
+  setSubmitting(true);
+
+  const { error } = await supabase.auth.updateUser({ password });
+
+  if (error) {
     setSubmitting(false);
-
-    if (error) {
-      setErrorMessage(error.message);
-      setStage("error");
-      toast.error(error.message);
-      return;
-    }
-
-    setStage("success");
-    toast.success("Welcome to the family!");
-    setTimeout(() => navigate({ to: "/dashboard", replace: true }), 1200);
+    setErrorMessage(error.message);
+    setStage("error");
+    toast.error(error.message);
+    return;
   }
+
+  // Mark this profile as actually active now — this is what makes them
+  // show up on the Members page, instead of the trigger doing it at invite time.
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes.user?.id;
+
+  if (userId) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("family_id")
+      .eq("id", userId)
+      .maybeSingle();
+
+    await supabase
+      .from("profiles")
+      .update({ accepted_at: new Date().toISOString() })
+      .eq("id", userId);
+
+    if (profile?.family_id) {
+      await supabase.from("activity_log").insert({
+        actor_id: userId,
+        action: "member_joined",
+        target_type: "family",
+        target_id: profile.family_id,
+        metadata: { invited: true },
+      });
+    }
+  }
+
+  setSubmitting(false);
+  setStage("success");
+  toast.success("Welcome to the family!");
+  setTimeout(() => navigate({ to: "/dashboard", replace: true }), 1200);
+}
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-accent/20">
@@ -88,7 +118,6 @@ function AcceptInvitePage() {
           <CardTitle className="font-display text-2xl">Join your family</CardTitle>
           <CardDescription>Set a password to finish joining Family Notes</CardDescription>
         </CardHeader>
-
         <CardContent>
           {stage === "checking" && (
             <div className="flex flex-col items-center gap-3 py-6">
@@ -96,61 +125,39 @@ function AcceptInvitePage() {
               <p className="text-sm text-muted-foreground">Checking your invite…</p>
             </div>
           )}
-
           {stage === "no_session" && (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <XCircle className="h-8 w-8 text-destructive" />
               <p className="font-medium">This invite link is invalid or has expired.</p>
-              <p className="text-sm text-muted-foreground">
-                Ask a family admin to send you a new invite.
-              </p>
+              <p className="text-sm text-muted-foreground">Ask a family admin to send you a new invite.</p>
             </div>
           )}
-
           {stage === "set_password" && (
             <form className="space-y-4" onSubmit={handleSetPassword}>
               <div className="space-y-1">
                 <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  minLength={8}
-                  required
-                />
+                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="confirmPassword">Confirm password</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  minLength={8}
-                  required
-                />
+                <Input id="confirmPassword" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} minLength={8} required />
               </div>
               <Button type="submit" className="w-full" disabled={submitting}>
                 {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Join family"}
               </Button>
             </form>
           )}
-
           {stage === "success" && (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <CheckCircle2 className="h-8 w-8 text-emerald-500" />
               <p className="font-medium">You're in! Redirecting…</p>
             </div>
           )}
-
           {stage === "error" && (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <XCircle className="h-8 w-8 text-destructive" />
               <p className="font-medium">{errorMessage}</p>
-              <Button variant="outline" onClick={() => setStage("set_password")}>
-                Try again
-              </Button>
+              <Button variant="outline" onClick={() => setStage("set_password")}>Try again</Button>
             </div>
           )}
         </CardContent>

@@ -46,7 +46,11 @@ function MembersPage() {
         { data: profiles, error: profilesError },
         { data: roles, error: rolesError },
       ] = await Promise.all([
-        supabase.from("profiles").select("*").order("created_at"),
+        supabase
+          .from("profiles")
+          .select("*")
+          .not("accepted_at", "is", null)
+          .order("created_at"),
         supabase.from("user_roles").select("*"),
       ]);
 
@@ -59,13 +63,13 @@ function MembersPage() {
         noteCounts[n.author_id] = (noteCounts[n.author_id] ?? 0) + 1;
       });
 
-      return (profiles ?? []).map((p: any) => {
-        const roleRow = (roles ?? []).find((r: any) => r.user_id === p.id);
+      return (profiles ?? []).map((profile: any) => {
+        const roleRow = (roles ?? []).find((r: any) => r.user_id === profile.id);
         return {
-          ...p,
+          ...profile,
           role: roleRow?.role as AppRole | undefined,
-          family_id: roleRow?.family_id ?? p.family_id,
-          note_count: noteCounts[p.id] ?? 0,
+          family_id: roleRow?.family_id ?? profile.family_id,
+          note_count: noteCounts[profile.id] ?? 0,
         };
       });
     },
